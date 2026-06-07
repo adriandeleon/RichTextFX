@@ -1,4 +1,54 @@
 
+> ## ⚠️ Personal fork
+>
+> This is a **personal fork** of RichTextFX. The original, canonical project lives at
+> **[FXMisc/RichTextFX](https://github.com/FXMisc/RichTextFX)** — use that for upstream releases,
+> issues, and documentation.
+>
+> ### What this fork adds
+>
+> VS Code–style **multiple cursors** and **column / box (rectangular) selection**, as an opt-in
+> add-on in the new `org.fxmisc.richtext.multi` package. It is built entirely on RichTextFX's public
+> API plus a layered input map (no changes to the editing/render hot path), and works on any
+> `GenericStyledArea` (`CodeArea`, `StyleClassedTextArea`, `InlineCssTextArea`, …). Enable it with one
+> call:
+>
+> ```java
+> MultiCaretController.install(area);
+> ```
+>
+> **Gestures:** `Cmd/Ctrl+Click` add a caret · `Cmd/Ctrl+D` select next occurrence ·
+> `Alt+Cmd/Ctrl+Up/Down` add a caret above/below · **`Alt+drag`** column/box selection · `Esc` collapse
+> to a single caret. While multiple carets exist, typing, Enter/Tab, Backspace/Delete (and word
+> variants), copy/cut, smart paste (one clipboard line per caret when counts match), and caret movement
+> all apply to **every caret at once**, each edit being a single undoable step. See
+> [`MultiCaretEditingDemo`](./richtextfx-demos/src/main/java/org/fxmisc/richtext/demo/MultiCaretEditingDemo.java).
+>
+> *Known limitations:* box selection covers visible lines (with a basic scroll nudge at the viewport
+> edge); IME composition and RTL/wrapped-line box geometry are not specially handled.
+>
+> ### How to get these changes
+>
+> The feature lives on the **`feat/multi-caret-box-selection`** branch of this fork.
+>
+> ```bash
+> git clone -b feat/multi-caret-box-selection https://github.com/adriandeleon/RichTextFX.git
+> cd RichTextFX
+>
+> # Build the jar (this fork builds against JDK 21; the produced jar runs on JDK 21+):
+> ./gradlew :richtextfx:jar
+>
+> # Or install it into your local Maven repo (~/.m2) to depend on it from another project:
+> ./gradlew :richtextfx:publishToMavenLocal
+> # → org.fxmisc.richtext:richtextfx:1.0.0-SNAPSHOT
+> ```
+>
+> This fork also carries two build-only tweaks needed to build locally: the JavaFX dependency is set to
+> 21 (so Apple-Silicon `mac-aarch64` natives resolve — JavaFX 11 ships none) and the `fatJar` tasks set
+> a `duplicatesStrategy`. They do not affect the library's bytecode/API.
+>
+> ---
+
 RichTextFX  
 ==========
 
