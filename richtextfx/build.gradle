@@ -25,7 +25,8 @@ javafx {
 
 // OSGi bundle is configured through the bnd.bnd file
 
-group = 'org.fxmisc.richtext'
+// Personal-fork groupId so this never collides with the official org.fxmisc.richtext artifact.
+group = 'io.github.adriandeleon'
 
 testSets {
     integrationTest { dirName = 'integrationTest' }

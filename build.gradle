@@ -1,7 +1,8 @@
 subprojects {
     apply plugin: 'eclipse'
 
-    version = '1.0.0-SNAPSHOT'
+    // Personal-fork coordinates: distinct from the official org.fxmisc.richtext artifact.
+    version = '0.11.7-multicaret.1'
     ext.specificationVersion = '0.11.0'
 
     repositories {
