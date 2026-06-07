@@ -36,6 +36,7 @@ task fatJar(type: Jar, dependsOn: classes) {
     dependsOn ":richtextfx:jar"
 
     archiveAppendix = 'fat'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     excludes = [ 'module-info.class',  // block module-info files from other jars
         '*.dll','javafx*','javafx/',   // block inclusion of javafx files
         'com/'                         // block com/sun/* files

@@ -14,7 +14,7 @@ plugins {
 }
 
 javafx {
-    version = '11'
+    version = '21.0.5'
     modules = [ 'javafx.controls', 'javafx.fxml']
     def taskNames = gradle.getStartParameter().getTaskNames()
     // Prevent pom & module.json from containing JavaFX runtime dependencies
@@ -205,6 +205,7 @@ mavenPublishing {
     
 task fatJar(type: Jar, dependsOn: classes) {
     archiveAppendix = 'fat'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest.attributes( 'Automatic-Module-Name': 'org.fxmisc.richtext' )
     from sourceSets.main.output
     from { configurations.compileClasspath.collect { it.isDirectory() ? it : zipTree(it) } }

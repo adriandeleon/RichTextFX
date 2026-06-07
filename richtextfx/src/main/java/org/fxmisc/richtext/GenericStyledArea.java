@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -486,6 +487,25 @@ public class GenericStyledArea<PS, SEG, S> extends Region
         } else {
             return false;
         }
+    }
+
+    /**
+     * Returns an unmodifiable view of all the carets currently displayed by this area, including the
+     * {@link #getCaretSelectionBind() main caret} and any extra carets added via {@link #addCaret(CaretNode)}.
+     * The returned set reflects later additions/removals. Useful for features (e.g. multiple cursors) that
+     * need to enumerate the carets they did not themselves create.
+     */
+    public final Set<CaretNode> getCaretSet() {
+        return Collections.unmodifiableSet(caretSet);
+    }
+
+    /**
+     * Returns an unmodifiable view of all the selections currently displayed by this area, including the
+     * {@link #getCaretSelectionBind() main selection} and any extra selections added via
+     * {@link #addSelection(Selection)}. The returned set reflects later additions/removals.
+     */
+    public final Set<Selection<PS, SEG, S>> getSelectionSet() {
+        return Collections.unmodifiableSet(selectionSet);
     }
 
     /* ********************************************************************** *
