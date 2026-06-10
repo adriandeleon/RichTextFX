@@ -256,7 +256,12 @@ public final class MultiCaretManager<PS, SEG, S> {
         commitOps(ops);
     }
 
-    /** Copy every selection to the clipboard, joined by newlines (in document order). */
+    /**
+     * Copy every selection to the clipboard, joined by newlines (in document order). When <em>no</em>
+     * caret has any selected text (e.g. a zero-width column of carets from a straight-down box drag),
+     * each caret's whole line is copied instead — VS Code behavior — deduplicating carets that share
+     * a line. Without the fallback such a copy silently wrote nothing.
+     */
     public void copy() {
         List<Target> targets = allTargets();
         targets.sort(Comparator.comparingInt(Target::selStart));
@@ -273,6 +278,15 @@ public final class MultiCaretManager<PS, SEG, S> {
             sb.append(area.getText(t.selStart(), t.selEnd()));
             any = true;
         }
+        if (!any) {
+            for (int par : distinctParagraphs(targets)) {
+                if (any) {
+                    sb.append('\n');
+                }
+                sb.append(area.getText(par));
+                any = true;
+            }
+        }
         if (any) {
             ClipboardContent content = new ClipboardContent();
             content.putString(sb.toString());
@@ -280,13 +294,48 @@ public final class MultiCaretManager<PS, SEG, S> {
         }
     }
 
-    /** Cut: copy every selection, then delete them in one undoable step. */
+    /**
+     * Cut: copy every selection, then delete them in one undoable step. When no caret has any selected
+     * text, each caret's whole line (including its line break) is cut instead — VS Code behavior —
+     * deduplicating carets that share a line.
+     */
     public void cut() {
         if (!area.isEditable()) {
             return;
         }
         copy();
-        deleteSelections();
+        for (Target t : allTargets()) {
+            if (t.selStart() != t.selEnd()) {
+                deleteSelections();
+                return;
+            }
+        }
+        // Zero-width carets everywhere: delete each caret's whole line as one undoable commit. One op
+        // per distinct line (the first caret on it); other same-line carets are position-tracked through
+        // the deletion and cleaned up by mergeCoincident() in commitOps.
+        List<Target> targets = allTargets();
+        targets.sort(Comparator.comparingInt(Target::selStart));
+        Set<Integer> pending = distinctParagraphs(targets);
+        List<Op> ops = new ArrayList<>();
+        for (Target t : targets) {
+            int par = t.paragraph();
+            if (!pending.remove(par)) {
+                continue; // another caret on this line already contributed the op
+            }
+            int start = area.getAbsolutePosition(par, 0);
+            int end = Math.min(area.getLength(), start + area.getParagraphLength(par) + 1); // +1 = line break
+            ops.add(new Op(t, start, end, ""));
+        }
+        commitOps(ops);
+    }
+
+    /** The targets' paragraph indices, deduplicated, in the iteration (document) order. */
+    private Set<Integer> distinctParagraphs(List<Target> targets) {
+        Set<Integer> pars = new java.util.LinkedHashSet<>();
+        for (Target t : targets) {
+            pars.add(t.paragraph());
+        }
+        return pars;
     }
 
     /**

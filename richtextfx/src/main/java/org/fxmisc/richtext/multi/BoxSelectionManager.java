@@ -71,21 +71,30 @@ final class BoxSelectionManager<PS, SEG, S> {
         double top = Math.min(anchorY, curY);
         double bottom = Math.max(anchorY, curY);
 
+        // Iterate by PARAGRAPH INDEX between the rectangle's vertical endpoints and hit-test each
+        // paragraph at its real center y. Stepping the y coordinate by an estimated line height (the
+        // previous approach) accumulates sub-pixel drift against the actual line advance, which could
+        // sample clean over a row and silently leave a line out of the box. (A wrapped paragraph is
+        // treated as one line — RTL/wrapped exactness is a documented out-of-scope.)
+        int parTop = area.offsetToPosition(area.hit(left, top).getInsertionIndex(),
+                org.fxmisc.richtext.model.TwoDimensional.Bias.Forward).getMajor();
+        int parBottom = area.offsetToPosition(area.hit(left, bottom).getInsertionIndex(),
+                org.fxmisc.richtext.model.TwoDimensional.Bias.Forward).getMajor();
+
         List<int[]> ranges = new ArrayList<>();
-        int prevStart = Integer.MIN_VALUE;
-        int prevEnd = Integer.MIN_VALUE;
-        int count = 0;
-        for (double y = top; y <= bottom + 0.0001 && count < MAX_LINES; y += lineH, count++) {
+        for (int par = parTop; par <= parBottom && ranges.size() < MAX_LINES; par++) {
+            Optional<Bounds> screen = area.getParagraphBoundsOnScreen(par); // visible lines only
+            if (!screen.isPresent()) {
+                continue;
+            }
+            Bounds local = area.screenToLocal(screen.get());
+            if (local == null) {
+                continue;
+            }
+            double y = (local.getMinY() + local.getMaxY()) / 2;
             int s = area.hit(left, y).getInsertionIndex();
             int en = area.hit(right, y).getInsertionIndex();
-            int lo = Math.min(s, en);
-            int hi = Math.max(s, en);
-            if (lo == prevStart && hi == prevEnd) {
-                continue; // same line hit twice (short line / rounding)
-            }
-            ranges.add(new int[]{lo, hi});
-            prevStart = lo;
-            prevEnd = hi;
+            ranges.add(new int[]{Math.min(s, en), Math.max(s, en)});
         }
         if (ranges.isEmpty()) {
             int p = area.hit(left, top).getInsertionIndex();

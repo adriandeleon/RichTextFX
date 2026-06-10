@@ -65,8 +65,12 @@ final class MultiCaretInputMap {
                 consume(keyPressed(KeyCode.DOWN, KeyCombination.ALT_DOWN, KeyCombination.SHORTCUT_DOWN),
                         e -> mgr.addCaretLineUpDown(true)),
 
-                // Escape collapses back to a single caret (only when extras exist).
+                // Escape collapses back to a single caret (only when extras exist). Also matched with Alt
+                // still held — right after an Alt+drag box selection the finger is naturally still on Alt,
+                // and an exact-modifier match would silently ignore the press.
                 consumeWhen(keyPressed(KeyCode.ESCAPE), mgr::hasExtras, e -> mgr.collapseToPrimary()),
+                consumeWhen(keyPressed(KeyCode.ESCAPE, KeyCombination.ALT_DOWN), mgr::hasExtras,
+                        e -> mgr.collapseToPrimary()),
 
                 // A plain primary press collapses extras, then lets the default behavior place the caret.
                 process(mousePressed(MouseButton.PRIMARY)
@@ -100,6 +104,14 @@ final class MultiCaretInputMap {
                 consume(keyPressed(KeyCode.V, KeyCombination.SHORTCUT_DOWN), e -> mgr.paste()),
                 consume(keyPressed(KeyCode.C, KeyCombination.SHORTCUT_DOWN), e -> mgr.copy()),
                 consume(keyPressed(KeyCode.X, KeyCombination.SHORTCUT_DOWN), e -> mgr.cut()),
+                // Also matched with Alt still held: right after an Alt+drag box selection the finger is
+                // naturally still on Alt, and an exact-modifier match would silently copy/cut nothing.
+                consume(keyPressed(KeyCode.V, KeyCombination.SHORTCUT_DOWN, KeyCombination.ALT_DOWN),
+                        e -> mgr.paste()),
+                consume(keyPressed(KeyCode.C, KeyCombination.SHORTCUT_DOWN, KeyCombination.ALT_DOWN),
+                        e -> mgr.copy()),
+                consume(keyPressed(KeyCode.X, KeyCombination.SHORTCUT_DOWN, KeyCombination.ALT_DOWN),
+                        e -> mgr.cut()),
                 consume(keyPressed(KeyCode.A, KeyCombination.SHORTCUT_DOWN), e -> {
                     mgr.collapseToPrimary();
                     area.selectAll();
