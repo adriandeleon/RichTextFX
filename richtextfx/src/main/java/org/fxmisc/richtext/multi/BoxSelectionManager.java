@@ -11,7 +11,8 @@ import java.util.Optional;
 /**
  * Implements Alt+drag column/box (rectangular) selection on top of {@link MultiCaretManager}. While the
  * user drags with Alt held, the rectangle's per-visual-line column ranges are mapped to one
- * caret+selection per line via {@link MultiCaretManager#setExtrasFromRanges(List)}. On release the
+ * caret+selection per line via {@link MultiCaretManager#updateBoxSelection(List)}, which reuses existing
+ * carets in place (no rebuild per pulse), and an unchanged pulse is skipped entirely. On release the
  * per-line carets simply remain as the active multi-caret set, so typing then replaces each line's range.
  *
  * <p>Hit-testing only addresses laid-out (visible) lines, so a box can only cover visible content; a basic
@@ -29,6 +30,8 @@ final class BoxSelectionManager<PS, SEG, S> {
     private double anchorX;
     private double anchorY;
     private boolean active;
+    /** The ranges pushed on the last drag pulse, so an unchanged pulse can be skipped entirely. */
+    private List<int[]> lastRanges;
 
     BoxSelectionManager(GenericStyledArea<PS, SEG, S> area, MultiCaretManager<PS, SEG, S> manager) {
         this.area = area;
@@ -39,6 +42,7 @@ final class BoxSelectionManager<PS, SEG, S> {
         anchorX = e.getX();
         anchorY = e.getY();
         active = true;
+        lastRanges = null;
         area.requestFocus();
     }
 
@@ -57,12 +61,32 @@ final class BoxSelectionManager<PS, SEG, S> {
             area.scrollYBy(lineH);
         }
 
-        manager.setExtrasFromRanges(computeRanges(x, y, lineH));
+        List<int[]> ranges = computeRanges(x, y, lineH);
+        // Drag events fire even when the pointer stays within the same character cells; skip the (costly)
+        // caret update entirely when nothing changed. Most pulses hit this fast path.
+        if (sameRanges(lastRanges, ranges)) {
+            return;
+        }
+        lastRanges = ranges;
+        manager.updateBoxSelection(ranges);
     }
 
     void release(MouseEvent e) {
         active = false;
+        lastRanges = null;
         manager.mergeCoincident();
+    }
+
+    private static boolean sameRanges(List<int[]> a, List<int[]> b) {
+        if (a == null || a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i)[0] != b.get(i)[0] || a.get(i)[1] != b.get(i)[1]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private List<int[]> computeRanges(double curX, double curY, double lineH) {

@@ -138,4 +138,27 @@ public class MultiCaretEditingTests extends InlineCssTextAreaAppTest {
             assertEquals(1, mgr.extraCount());
         });
     }
+
+    @Test
+    public void word_delete_at_every_caret_uses_windowed_boundaries() {
+        interact(() -> {
+            area.replaceText("alpha beta\ngamma delta");
+            area.moveTo(10);   // end of first line ("...beta")
+            mgr.addCaretAt(22); // end of second line ("...delta")
+            mgr.deletePrevWord();
+            assertEquals("alpha \ngamma ", area.getText());
+        });
+    }
+
+    @Test
+    public void word_move_at_every_caret() {
+        interact(() -> {
+            area.replaceText("alpha beta\ngamma delta");
+            area.moveTo(0);
+            mgr.addCaretAt(11); // start of second line
+            mgr.moveHorizontal(+1, true, false); // word-right at both carets
+            // primary: 0 -> end of "alpha" (5); extra: 11 -> end of "gamma" (16)
+            assertEquals(5, area.getCaretSelectionBind().getPosition());
+        });
+    }
 }

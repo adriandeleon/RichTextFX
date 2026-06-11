@@ -12,7 +12,6 @@ import org.fxmisc.richtext.SelectionImpl;
 import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -30,7 +29,9 @@ import java.util.Set;
  */
 public final class MultiCaretManager<PS, SEG, S> {
 
-    private static final boolean MAC = System.getProperty("os.name", "").toLowerCase().contains("mac");
+    /** Half-window (chars) scanned on each side of a caret to find a word boundary, so word
+     *  navigation/deletion never materializes the whole document. Larger than any realistic word. */
+    private static final int WORD_WINDOW = 256;
 
     private final GenericStyledArea<PS, SEG, S> area;
     private final List<CaretWithSelection<PS, SEG, S>> extras = new ArrayList<>();
@@ -183,14 +184,13 @@ public final class MultiCaretManager<PS, SEG, S> {
         if (!area.isEditable()) {
             return;
         }
-        String text = area.getText();
         List<Op> ops = new ArrayList<>();
         for (Target t : allTargets()) {
             if (t.selStart() != t.selEnd()) {
                 ops.add(new Op(t, t.selStart(), t.selEnd(), ""));
             } else {
                 int c = t.caret();
-                ops.add(new Op(t, WordBreaks.prevBoundary(text, c), c, ""));
+                ops.add(new Op(t, prevWordBoundary(c), c, ""));
             }
         }
         commitOps(ops);
@@ -201,14 +201,13 @@ public final class MultiCaretManager<PS, SEG, S> {
         if (!area.isEditable()) {
             return;
         }
-        String text = area.getText();
         List<Op> ops = new ArrayList<>();
         for (Target t : allTargets()) {
             if (t.selStart() != t.selEnd()) {
                 ops.add(new Op(t, t.selStart(), t.selEnd(), ""));
             } else {
                 int c = t.caret();
-                ops.add(new Op(t, c, WordBreaks.nextBoundary(text, c), ""));
+                ops.add(new Op(t, c, nextWordBoundary(c), ""));
             }
         }
         commitOps(ops);
@@ -403,13 +402,12 @@ public final class MultiCaretManager<PS, SEG, S> {
      * its anchor; otherwise collapse to the moved position (or the selection edge in the move direction).
      */
     public void moveHorizontal(int dir, boolean word, boolean shift) {
-        String text = word ? area.getText() : null;
         int len = area.getLength();
         for (Target t : allTargets()) {
             int caret = t.caret();
             int n;
             if (word) {
-                n = dir < 0 ? WordBreaks.prevBoundary(text, caret) : WordBreaks.nextBoundary(text, caret);
+                n = dir < 0 ? prevWordBoundary(caret) : nextWordBoundary(caret);
             } else {
                 n = clamp(caret + dir, len);
             }
@@ -566,40 +564,74 @@ public final class MultiCaretManager<PS, SEG, S> {
         extras.clear();
     }
 
-    /** Replace the current carets with exactly the given selection ranges (used by box selection on release). */
-    void setExtrasFromRanges(List<int[]> ranges) {
-        collapseToPrimary();
+    /**
+     * Live box-selection update: make the carets match {@code ranges} (range 0 drives the primary, the rest
+     * are extras) by <em>reusing existing carets/selections in place</em> and only adding/removing the count
+     * delta. Called on every drag pulse, so it must avoid the create+dispose churn of rebuilding the whole
+     * set each time. Coincident (ragged-line) carets are left as-is during the drag and merged on release.
+     */
+    void updateBoxSelection(List<int[]> ranges) {
         if (ranges.isEmpty()) {
+            collapseToPrimary();
             return;
         }
-        // First range drives the primary caret; the rest become extras.
         int[] first = ranges.get(0);
         bind().selectRangeExpl(first[0], first[1]);
-        for (int i = 1; i < ranges.size(); i++) {
-            int[] r = ranges.get(i);
+
+        int wanted = ranges.size() - 1;   // number of extras the box needs
+        int existing = extras.size();
+        int overlap = Math.min(wanted, existing);
+
+        // 1. Reuse the carets we already have — just move them.
+        for (int i = 0; i < overlap; i++) {
+            int[] r = ranges.get(i + 1);
+            CaretWithSelection<PS, SEG, S> c = extras.get(i);
+            c.caret.moveTo(r[1]);
+            c.selection.selectRange(Math.min(r[0], r[1]), Math.max(r[0], r[1]));
+            c.anchor = r[0];
+        }
+        // 2. Remove the surplus (box shrank).
+        for (int i = existing - 1; i >= wanted; i--) {
+            CaretWithSelection<PS, SEG, S> c = extras.remove(i);
+            area.removeCaret(c.caret);
+            area.removeSelection(c.selection);
+        }
+        // 3. Add the deficit (box grew).
+        for (int i = existing; i < wanted; i++) {
+            int[] r = ranges.get(i + 1);
             addCaretWithSelection(r[0], r[1]);
         }
-        mergeCoincident();
     }
 
     /* ****************************************************************** *
      * Helpers                                                          *
      * ****************************************************************** */
 
-    /** Remove extra carets that coincide (same caret position) with the primary or another extra. */
+    /**
+     * Remove extra carets that coincide (same caret position) with the primary or an earlier extra.
+     * Runs after every edit/move, so it's allocation-free on the common (no-duplicate) path: no
+     * {@code HashSet}/boxing, just an O(M²) scan over the (small) caret count.
+     */
     public void mergeCoincident() {
-        Set<Integer> seen = new HashSet<>();
-        seen.add(bind().getPosition());
-        List<CaretWithSelection<PS, SEG, S>> toRemove = new ArrayList<>();
-        for (CaretWithSelection<PS, SEG, S> c : extras) {
-            if (!seen.add(c.caret.getPosition())) {
-                toRemove.add(c);
-            }
+        if (extras.isEmpty()) {
+            return;
         }
-        for (CaretWithSelection<PS, SEG, S> c : toRemove) {
-            area.removeCaret(c.caret);
-            area.removeSelection(c.selection);
-            extras.remove(c);
+        int primary = bind().getPosition();
+        for (int i = 0; i < extras.size(); ) {
+            int pos = extras.get(i).caret.getPosition();
+            boolean dup = pos == primary;
+            for (int j = 0; !dup && j < i; j++) {
+                if (extras.get(j).caret.getPosition() == pos) {
+                    dup = true;
+                }
+            }
+            if (dup) {
+                CaretWithSelection<PS, SEG, S> c = extras.remove(i);
+                area.removeCaret(c.caret);
+                area.removeSelection(c.selection);
+            } else {
+                i++;
+            }
         }
     }
 
@@ -615,14 +647,38 @@ public final class MultiCaretManager<PS, SEG, S> {
         return false;
     }
 
+    /** Previous word boundary before {@code caret}, scanning only a bounded window (not the whole doc). */
+    private int prevWordBoundary(int caret) {
+        int from = Math.max(0, caret - WORD_WINDOW);
+        if (from == caret) {
+            return caret;
+        }
+        String window = area.getText(from, caret);
+        return from + WordBreaks.prevBoundary(window, window.length());
+    }
+
+    /** Next word boundary after {@code caret}, scanning only a bounded window (not the whole doc). */
+    private int nextWordBoundary(int caret) {
+        int to = Math.min(area.getLength(), caret + WORD_WINDOW);
+        if (to == caret) {
+            return caret;
+        }
+        String window = area.getText(caret, to);
+        return caret + WordBreaks.nextBoundary(window, 0);
+    }
+
     private int[] wordRangeAt(int pos) {
-        String text = area.getText();
+        // Bounded window around the caret rather than the whole document.
+        int from = Math.max(0, pos - WORD_WINDOW);
+        int to = Math.min(area.getLength(), pos + WORD_WINDOW);
+        String text = area.getText(from, to);
         if (text.isEmpty()) {
             return null;
         }
+        int rel = Math.min(Math.max(0, pos - from), text.length());
         BreakIterator it = BreakIterator.getWordInstance();
         it.setText(text);
-        int end = it.following(Math.min(pos, text.length()));
+        int end = it.following(rel);
         if (end == BreakIterator.DONE) {
             end = text.length();
         }
@@ -630,7 +686,7 @@ public final class MultiCaretManager<PS, SEG, S> {
         if (start == BreakIterator.DONE) {
             start = 0;
         }
-        return start == end ? null : new int[]{start, end};
+        return start == end ? null : new int[]{from + start, from + end};
     }
 
     private int clamp(int pos) {
