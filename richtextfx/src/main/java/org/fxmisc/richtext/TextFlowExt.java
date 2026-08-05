@@ -20,6 +20,22 @@ import javafx.scene.text.TextFlow;
 class TextFlowExt extends TextFlow {
 
     private TextFlowLayout layout;
+
+    /**
+     * Inlay decorations injected into this flow, as a document&harr;flow index translation.
+     *
+     * <p><b>Two coordinate systems live in this class.</b> Everything above it — carets, selections, the
+     * document model — counts only real characters (<i>document</i> indices). {@link TextFlowLayout} and
+     * JavaFX's own {@code rangeShape}/{@code hitTest} count every managed child, and a child that is not a
+     * {@link javafx.scene.text.Text} counts as one character (<i>flow</i> indices). With no inlays the two
+     * are identical, which is why the {@code *Flow} internals below can be called directly on values that
+     * already came out of the layout.
+     *
+     * <p>Methods taking an index translate on the way in; methods returning one translate on the way out.
+     * See {@link InlayIndex}.
+     */
+    private InlayIndex inlays = InlayIndex.EMPTY;
+
     /*
      * Rename/Refactor to getLayoutInfo() and delete for JavaFX 25
      * Also delete TextFlowLayout and TextFlowSpan.
@@ -32,25 +48,46 @@ class TextFlowExt extends TextFlow {
         return layout;
     }
 
+    /** Declares the document columns at which inlay decoration nodes have been injected. */
+    void setInlayIndex( InlayIndex index ) {
+        this.inlays = (index == null) ? InlayIndex.EMPTY : index;
+    }
+
+    InlayIndex getInlayIndex() {
+        return inlays;
+    }
+
     int getLineCount() {
         return textLayout().getTextLineCount();
     }
 
     int getLineStartPosition(int charIdx) {
-        return textLayout().getTextLine( getLineOfCharacter(charIdx), false ).start();
+        return inlays.toDoc( getLineStartPositionFlow( inlays.toFlow( charIdx ) ) );
+    }
+
+    private int getLineStartPositionFlow(int flowIdx) {
+        return textLayout().getTextLine( getLineOfCharacterFlow(flowIdx), false ).start();
     }
 
     int getLineEndPosition(int charIdx) {
-        int line = getLineOfCharacter( charIdx );
+        return inlays.toDoc( getLineEndPositionFlow( inlays.toFlow( charIdx ) ) );
+    }
+
+    private int getLineEndPositionFlow(int flowIdx) {
+        int line = getLineOfCharacterFlow( flowIdx );
         int end = textLayout().getTextLine( line, false ).end();
         if ( line < (getLineCount() - 1) ) end--; // trailing space
         return end;
     }
 
     int getLineOfCharacter(int charIdx) {
+        return getLineOfCharacterFlow( inlays.toFlow( charIdx ) );
+    }
+
+    private int getLineOfCharacterFlow(int flowIdx) {
         var layout = textLayout();
         return IntStream.range( 0, getLineCount() )
-                .filter( l -> charIdx < layout.getTextLine( l, false ).end() )
+                .filter( l -> flowIdx < layout.getTextLine( l, false ).end() )
                 .findFirst().orElse( Math.max(0,getLineCount()-1) );
     }
 
@@ -59,6 +96,15 @@ class TextFlowExt extends TextFlow {
     }
 
     PathElement[] getRangeShape(int from, int to) {
+        return rangeShape(inlays.toFlow(from), inlays.toFlow(to));
+    }
+
+    /**
+     * A range shape for indices that are <b>already</b> in flow coordinates. Used by
+     * {@link ParagraphText}'s background/border/underline pass, which walks the children itself and so
+     * counts in the same units the layout does.
+     */
+    PathElement[] getRangeShapeFlow(int from, int to) {
         return rangeShape(from, to);
     }
 
@@ -80,6 +126,11 @@ class TextFlowExt extends TextFlow {
      *         underline from the first to the last character.
      */
     PathElement[] getUnderlineShape(int from, int to, double offset, double waveRadius, double doubleGap) {
+        return getUnderlineShapeFlow( inlays.toFlow(from), inlays.toFlow(to), offset, waveRadius, doubleGap );
+    }
+
+    /** As {@link #getUnderlineShape}, for indices already in flow coordinates. */
+    PathElement[] getUnderlineShapeFlow(int from, int to, double offset, double waveRadius, double doubleGap) {
         // get a Path for the text underline
         List<PathElement> result = new ArrayList<>();
 
@@ -168,30 +219,32 @@ class TextFlowExt extends TextFlow {
 
         Rectangle2D lineBounds = textLayout().getTextLine( line, false ).bounds();
         HitInfo hit = hitTest(new Point2D(x, y));
+        // hitTest speaks flow indices; every comparison below is against layout values, so the whole
+        // method stays in flow coordinates and converts only where a CharacterHit is built.
         int charIdx = hit.getCharIndex();
         boolean leading = hit.isLeading();
 
         if (y >= lineBounds.getMaxY()) {
-            return CharacterHit.insertionAt(charIdx);
+            return CharacterHit.insertionAt(inlays.toDoc(charIdx));
         }
 
         if ( ! leading && getLineCount() > 1) {
             // If this is a wrapped paragraph and hit character is at end of hit line, make sure that the
             // "character hit" stays at the end of the hit line (and not at the beginning of the next line).
-            leading = (getLineOfCharacter(charIdx) + 1 < getLineCount() && charIdx + 1 >= textLayout().getTextLine( line, false ).end());
+            leading = (getLineOfCharacterFlow(charIdx) + 1 < getLineCount() && charIdx + 1 >= textLayout().getTextLine( line, false ).end());
         }
 
         if(x < lineBounds.getMinX() || x > lineBounds.getMaxX()) {
             if(leading) {
-                return CharacterHit.insertionAt(charIdx);
+                return CharacterHit.insertionAt(inlays.toDoc(charIdx));
             } else {
-                return CharacterHit.insertionAt(charIdx + 1);
+                return CharacterHit.insertionAt(inlays.toDoc(charIdx + 1));
             }
         } else {
             if(leading) {
-                return CharacterHit.leadingHalfOf(charIdx);
+                return CharacterHit.leadingHalfOf(inlays.toDoc(charIdx));
             } else {
-                return CharacterHit.trailingHalfOf(charIdx);
+                return CharacterHit.trailingHalfOf(inlays.toDoc(charIdx));
             }
         }
     }
