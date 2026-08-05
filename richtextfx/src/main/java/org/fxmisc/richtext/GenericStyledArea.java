@@ -394,6 +394,38 @@ public class GenericStyledArea<PS, SEG, S> extends Region
         gProp.bind(paragraphGraphicFactoryProperty());
     }
 
+    private final ObjectProperty<IntFunction<? extends List<Inlay>>> inlayFactory = new SimpleObjectProperty<>(null);
+
+    /**
+     * Supplies the {@link Inlay} decorations for a paragraph, by index — inline annotations that occupy
+     * layout width without being part of the document (an editor's "inlay hints").
+     *
+     * <p>Called per visible paragraph, so it should be cheap and free of side effects; return null or an
+     * empty list for a paragraph with no decorations.
+     *
+     * <p><b>Inlays never affect the document.</b> Offsets, {@code getText()}, selections, the undo history
+     * and every position this area reports are unchanged by adding one — see {@link Inlay}.
+     */
+    public ObjectProperty<IntFunction<? extends List<Inlay>>> inlayFactoryProperty() { return inlayFactory; }
+    public void setInlayFactory( IntFunction<? extends List<Inlay>> factory ) { inlayFactory.set(factory); }
+    public IntFunction<? extends List<Inlay>> getInlayFactory() { return inlayFactory.get(); }
+
+    /**
+     * Re-queries the inlay factory for every visible paragraph. Use when the decorations changed but the
+     * factory object did not — the common case, since a caller normally keeps one function reading from a
+     * mutable map. Cheap when nothing actually changed: {@code ParagraphText} compares the new list against
+     * the current one and does nothing if they are equal.
+     */
+    public void refreshInlays() {
+        IntFunction<? extends List<Inlay>> factory = inlayFactory.get();
+        if (factory == null) {
+            return;
+        }
+        // Bounce the property so every bound cell re-evaluates; setting it to its own value would not fire.
+        inlayFactory.set(null);
+        inlayFactory.set(factory);
+    }
+
     public Node getParagraphGraphic( int parNdx ) {
         return getCell(parNdx).getGraphic();
     }
@@ -1939,6 +1971,7 @@ public class GenericStyledArea<PS, SEG, S> extends Region
         box.highlightTextFillProperty().bind(highlightTextFill);
         box.wrapTextProperty().bind(wrapTextProperty());
         box.graphicFactoryProperty().bind(paragraphGraphicFactoryProperty());
+        box.inlayFactoryProperty().bind(inlayFactoryProperty());
         box.graphicOffset.bind(virtualFlow.breadthOffsetProperty());
 
         EventStream<Integer> boxIndexValues = box.indexProperty().values().filter(i -> i != -1);

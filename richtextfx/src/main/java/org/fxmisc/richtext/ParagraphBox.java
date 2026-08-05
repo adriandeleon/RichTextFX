@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.List;
 import java.util.function.IntFunction;
 
 import javafx.beans.property.BooleanProperty;
@@ -70,6 +71,13 @@ class ParagraphBox<PS, SEG, S> extends Region {
 
     private final Val<Node> graphic;
 
+    private final ObjectProperty<IntFunction<? extends List<Inlay>>> inlayFactory
+            = new SimpleObjectProperty<>(null);
+    /** @see GenericStyledArea#inlayFactoryProperty() */
+    public ObjectProperty<IntFunction<? extends List<Inlay>>> inlayFactoryProperty() {
+        return inlayFactory;
+    }
+
     final DoubleProperty graphicOffset = new SimpleDoubleProperty(0.0);
 
     private final BooleanProperty wrapText = new SimpleBooleanProperty(false);
@@ -119,6 +127,12 @@ class ParagraphBox<PS, SEG, S> extends Region {
             }
         });
         graphicOffset.addListener(obs -> requestLayout());
+
+        // Inlay decorations, resolved per paragraph index exactly like the gutter graphic above. Combining
+        // with this box's index is what makes cell recycling work: a recycled box is handed a new index and
+        // picks up that paragraph's inlays with no extra plumbing.
+        Val.combine(inlayFactory, this.index, (f, i) -> (f != null && i > -1) ? f.apply(i) : null)
+                .addListener((obs, oldInlays, newInlays) -> text.setInlays(newInlays));
     }
 
     void dispose() {

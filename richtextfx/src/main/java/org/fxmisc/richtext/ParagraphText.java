@@ -1,7 +1,10 @@
 package org.fxmisc.richtext;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -32,6 +35,7 @@ import javafx.collections.SetChangeListener;
 import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
+import javafx.scene.control.Label;
 import javafx.scene.control.IndexRange;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.Paint;
@@ -86,6 +90,18 @@ class ParagraphText<PS, SEG, S> extends TextFlowExt {
     //      caret shapes
     // towards getChildren().size() - 1 index
     private int selectionShapeStartIndex = 0;
+
+    /** Kept so the text run can be rebuilt when inlays change; see {@link #rebuildTextRun()}. */
+    private final Function<StyledSegment<SEG, S>, Node> nodeFactory;
+
+    /**
+     * The children this class owns — the segment nodes plus any inlay decorations interleaved among them,
+     * in visual order. Tracked by identity so a rebuild can splice exactly this run out of
+     * {@code getChildren()} without disturbing the background/selection/caret shapes around it.
+     */
+    private final List<Node> textRun = new ArrayList<>();
+
+    private List<Inlay> inlays = Collections.emptyList();
 
     ParagraphText(Paragraph<PS, SEG, S> par, Function<StyledSegment<SEG, S>, Node> nodeFactory) {
         this.paragraph = par;
@@ -149,16 +165,9 @@ class ParagraphText<PS, SEG, S> extends TextFlowExt {
 //            }
 //        });
 
-        // populate with text nodes
-        par.getStyledSegments().stream().map(nodeFactory).forEach(n -> {
-            if (n instanceof TextExt) {
-                TextExt t = (TextExt) n;
-                // XXX: binding selectionFill to textFill,
-                // see the note at highlightTextFill
-                t.selectionFillProperty().bind(t.fillProperty());
-            }
-            getChildren().add(n);
-        });
+        // populate with text nodes (and any inlay decorations, once setInlays is called)
+        this.nodeFactory = nodeFactory;
+        rebuildTextRun();
 
         // set up custom css shape helpers
         UnaryOperator<Path> configurePath = shape -> {
@@ -183,7 +192,8 @@ class ParagraphText<PS, SEG, S> extends TextFlowExt {
                 (backgroundShape, tuple) -> {
                     backgroundShape.setStrokeWidth(0);
                     backgroundShape.setFill(tuple._1);
-                    backgroundShape.getElements().setAll(getRangeShape(tuple._2));
+                    // flow coordinates: updateBackgroundShapes walks the children itself
+                    backgroundShape.getElements().setAll(getRangeShapeFlow(tuple._2.getStart(), tuple._2.getEnd()));
                 },
                 addToBackgroundAndIncrementSelectionIndex,
                 clearUnusedAndDecrementSelectionIndex
@@ -200,7 +210,7 @@ class ParagraphText<PS, SEG, S> extends TextFlowExt {
                     if (attributes.dashArray != null) {
                         borderShape.getStrokeDashArray().setAll(attributes.dashArray);
                     }
-                    borderShape.getElements().setAll(getRangeShape(tuple._2));
+                    borderShape.getElements().setAll(getRangeShapeFlow(tuple._2.getStart(), tuple._2.getEnd()));
                 },
                 addToBackground,
                 clearUnusedShapes
@@ -215,7 +225,7 @@ class ParagraphText<PS, SEG, S> extends TextFlowExt {
                     if (attributes.dashArray != null) {
                         underlineShape.getStrokeDashArray().setAll(attributes.dashArray);
                     }
-                    PathElement[] shape = getUnderlineShape(tuple._2.getStart(), tuple._2.getEnd(),
+                    PathElement[] shape = getUnderlineShapeFlow(tuple._2.getStart(), tuple._2.getEnd(),
                                           attributes.offset, attributes.waveRadius, attributes.doubleGap);
                     underlineShape.getElements().setAll(shape);
                 },
@@ -474,6 +484,116 @@ class ParagraphText<PS, SEG, S> extends TextFlowExt {
         borderShapeHelper.updateSharedShapes();
         backgroundShapeHelper.updateSharedShapes();
         underlineShapeHelper.updateSharedShapes();
+    }
+
+    /**
+     * Sets the inline decorations for this paragraph, rebuilding the text run so they displace the glyphs
+     * that follow them. A no-op when the list is unchanged, because cells are re-pushed on every update
+     * and rebuilding on each one would throw away layout for nothing.
+     */
+    void setInlays(List<Inlay> newInlays) {
+        List<Inlay> sanitized = sanitize(newInlays);
+        if (inlays.equals(sanitized)) {
+            return;
+        }
+        inlays = sanitized;
+        rebuildTextRun();
+    }
+
+    /**
+     * Drops inlays outside the paragraph and sorts by column, so the build below can walk them in one pass
+     * and {@link InlayIndex} gets the ascending columns it documents. An out-of-range column is dropped
+     * rather than clamped: it means the caller measured against a document that has since changed, and
+     * piling several of them onto the last column would render a run of hints that belong nowhere.
+     */
+    private List<Inlay> sanitize(List<Inlay> given) {
+        if (given == null || given.isEmpty()) {
+            return Collections.emptyList();
+        }
+        int len = paragraph.length();
+        List<Inlay> out = new ArrayList<>(given.size());
+        for (Inlay i : given) {
+            if (i != null && i.getColumn() >= 0 && i.getColumn() <= len) {
+                out.add(i);
+            }
+        }
+        out.sort(Comparator.comparingInt(Inlay::getColumn));
+        return out;
+    }
+
+    /**
+     * Rebuilds the segment nodes, interleaving the inlay decorations, and republishes the resulting
+     * document&harr;flow translation to {@link TextFlowExt}.
+     *
+     * <p>Splitting is delegated to {@link Paragraph#subSequence(int, int)} rather than done by hand on the
+     * {@link TextExt} nodes: an inlay column usually falls <em>inside</em> a style span (syntax highlighting
+     * makes spans short), and asking the model to split gives correctly-styled sub-segments through the same
+     * {@code nodeFactory}, instead of trying to clone a node's styling faithfully.
+     */
+    private void rebuildTextRun() {
+        // Splice in place: the shapes around this run (backgrounds at the front, underlines and carets at
+        // the back) must keep their relative order, which the children-order contract above depends on.
+        int at = textRun.isEmpty() ? getChildren().size() : getChildren().indexOf(textRun.get(0));
+        if (at < 0) {
+            at = getChildren().size();
+        }
+        getChildren().removeAll(textRun);
+        textRun.clear();
+
+        List<Node> built = new ArrayList<>();
+        int[] columns = new int[inlays.size()];
+        int prev = 0;
+        for (int i = 0; i < inlays.size(); i++) {
+            Inlay inlay = inlays.get(i);
+            int col = inlay.getColumn();
+            columns[i] = col;
+            if (col > prev) {
+                addSegmentNodes(built, prev, col);
+            }
+            built.add(createInlayNode(inlay));
+            prev = col;
+        }
+        addSegmentNodes(built, prev, paragraph.length());
+
+        getChildren().addAll(at, built);
+        textRun.addAll(built);
+        setInlayIndex(InlayIndex.of(columns));
+        requestLayout();
+    }
+
+    /** Appends the nodes for document range {@code [from, to)}, styled exactly as the model says. */
+    private void addSegmentNodes(List<Node> into, int from, int to) {
+        Paragraph<PS, SEG, S> part = (from == 0 && to == paragraph.length())
+                ? paragraph
+                : paragraph.subSequence(from, to);
+        for (StyledSegment<SEG, S> segment : part.getStyledSegments()) {
+            Node n = nodeFactory.apply(segment);
+            if (n instanceof TextExt) {
+                TextExt t = (TextExt) n;
+                // XXX: binding selectionFill to textFill,
+                // see the note at highlightTextFill
+                t.selectionFillProperty().bind(t.fillProperty());
+            }
+            into.add(n);
+        }
+    }
+
+    /**
+     * The node for one inlay. Deliberately <b>not</b> a {@link javafx.scene.text.Text}: a Text child
+     * contributes every one of its characters to the flow index, whereas any other node contributes exactly
+     * one — which is the assumption {@link InlayIndex} is built on.
+     */
+    private Node createInlayNode(Inlay inlay) {
+        Label label = new Label(inlay.getText());
+        label.getStyleClass().add("inlay");
+        if (inlay.getStyleClass() != null) {
+            label.getStyleClass().add(inlay.getStyleClass());
+        }
+        // The decoration is scenery: it must never take a click away from the text it sits between, and it
+        // must never be reachable by keyboard.
+        label.setMouseTransparent(true);
+        label.setFocusTraversable(false);
+        return label;
     }
 
     @Override
