@@ -394,6 +394,49 @@ public class GenericStyledArea<PS, SEG, S> extends Region
         gProp.bind(paragraphGraphicFactoryProperty());
     }
 
+    private final ObjectProperty<IntFunction<? extends Node>> lensFactory = new SimpleObjectProperty<>(null);
+
+    /**
+     * Factory for a <em>lens</em>: a node given its own row above a paragraph, spanning the width.
+     *
+     * <p>The vertical counterpart of {@link #paragraphGraphicFactoryProperty()}, which only ever occupies
+     * width — a gutter graphic taller than the line is resized down to it rather than growing the row. A
+     * lens is the only decoration here that changes a paragraph's height, which is what makes it usable
+     * for a code lens, an inline annotation, or a per-line banner.
+     *
+     * <p><b>A lens never affects the document.</b> Offsets, {@code getText()}, selections and the undo
+     * history are untouched; only the paragraph's layout changes. Hit-testing accounts for the band, so a
+     * click below a lens still lands on the character under the pointer.
+     */
+    public ObjectProperty<IntFunction<? extends Node>> lensFactoryProperty() { return lensFactory; }
+    public void setLensFactory( IntFunction<? extends Node> factory ) { lensFactory.set(factory); }
+    public IntFunction<? extends Node> getLensFactory() { return lensFactory.get(); }
+
+    /**
+     * Re-queries the lens factory for one paragraph — the counterpart of
+     * {@link #recreateParagraphGraphic(int)}, for when the lens content changed but the factory did not.
+     */
+    /**
+     * Re-queries the lens factory for every visible paragraph. Use when the lenses changed but the factory
+     * object did not — the common case, since a caller normally keeps one function reading from a mutable
+     * map. Mirrors {@link #refreshInlays()}, and is needed for the same reason: setting the property to its
+     * own value does not fire, so a swapped map would never reach the cells.
+     */
+    public void refreshLenses() {
+        IntFunction<? extends Node> factory = lensFactory.get();
+        if (factory == null) {
+            return;
+        }
+        lensFactory.set(null);
+        lensFactory.set(factory);
+    }
+
+    public void recreateParagraphLens( int parNdx ) {
+        ObjectProperty<IntFunction<? extends Node>> lProp = getCell(parNdx).lensFactoryProperty();
+        lProp.unbind();
+        lProp.bind(lensFactoryProperty());
+    }
+
     private final ObjectProperty<IntFunction<? extends List<Inlay>>> inlayFactory = new SimpleObjectProperty<>(null);
 
     /**
@@ -1972,6 +2015,7 @@ public class GenericStyledArea<PS, SEG, S> extends Region
         box.wrapTextProperty().bind(wrapTextProperty());
         box.graphicFactoryProperty().bind(paragraphGraphicFactoryProperty());
         box.inlayFactoryProperty().bind(inlayFactoryProperty());
+        box.lensFactoryProperty().bind(lensFactoryProperty());
         box.graphicOffset.bind(virtualFlow.breadthOffsetProperty());
 
         EventStream<Integer> boxIndexValues = box.indexProperty().values().filter(i -> i != -1);

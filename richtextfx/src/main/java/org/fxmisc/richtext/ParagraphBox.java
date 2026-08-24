@@ -63,6 +63,24 @@ class ParagraphBox<PS, SEG, S> extends Region {
 
     private final ParagraphText<PS, SEG, S> text;
 
+    /**
+     * Factory for a <em>lens</em>: a node rendered in its own row ABOVE this paragraph, spanning the
+     * width — the vertical counterpart of the gutter graphic, which only ever occupies width.
+     *
+     * <p>This is the one decoration that changes the paragraph's HEIGHT. Everything else RichTextFX
+     * offers either draws over the text or sits beside it, so a caller wanting a row above a line (a
+     * reference-count lens, an annotation) previously had nowhere to put it: an over-tall gutter graphic
+     * is resized to the row rather than growing it.
+     */
+    private final ObjectProperty<IntFunction<? extends Node>> lensFactory =
+            new SimpleObjectProperty<>(null);
+
+    public ObjectProperty<IntFunction<? extends Node>> lensFactoryProperty() {
+        return lensFactory;
+    }
+
+    private final Val<Node> lens;
+
     private final ObjectProperty<IntFunction<? extends Node>> graphicFactory
             = new SimpleObjectProperty<>(null);
     public ObjectProperty<IntFunction<? extends Node>> graphicFactoryProperty() {
@@ -127,6 +145,22 @@ class ParagraphBox<PS, SEG, S> extends Region {
             }
         });
         graphicOffset.addListener(obs -> requestLayout());
+        lens = Val.combine(
+                lensFactory, this.index, (f, i) -> f != null && i > -1 ? f.apply(i) : null);
+        lens.addListener((obs, oldL, newL) -> {
+            if (oldL != null) {
+                getChildren().remove(oldL);
+            }
+            if (newL != null) {
+                getChildren().add(newL);
+            }
+            // The lens changes how tall this paragraph is, so the flow has to re-measure it — a plain
+            // requestLayout() would re-place the children inside a box that is still the old height.
+            requestLayout();
+            if (getParent() != null) {
+                getParent().requestLayout();
+            }
+        });
 
         // Inlay decorations, resolved per paragraph index exactly like the gutter graphic above. Combining
         // with this box's index is what makes cell recycling work: a recycled box is handed a new index and
@@ -257,28 +291,48 @@ class ParagraphBox<PS, SEG, S> extends Region {
         if ( ! wrapText.get() ) width = Double.MAX_VALUE;
         Insets insets = getInsets();
         double overhead = getGraphicPrefWidth() + insets.getLeft() + insets.getRight();
-        return text.prefHeight(width - overhead) + insets.getTop() + insets.getBottom() + text.getLineSpacing();
+        return text.prefHeight(width - overhead)
+                + insets.getTop()
+                + insets.getBottom()
+                + text.getLineSpacing()
+                + getLensPrefHeight();
     }
 
     @Override
     protected void layoutChildren() {
         Insets ins = getInsets();
-        double h = getHeight() - ins.getTop() - ins.getBottom();
+        double lensHeight = getLensPrefHeight();
+        // The lens owns the top band of the box; the text and the gutter graphic share what is left, so
+        // both start below it. Every other coordinate in here is expressed against `top` rather than the
+        // inset for exactly that reason.
+        double top = ins.getTop() + lensHeight;
+        double h = getHeight() - top - ins.getBottom();
         double w = getWidth() - ins.getLeft() - ins.getRight();
         double graphicWidth = getGraphicPrefWidth();
 
+        lens.filter( Node::isManaged ).ifPresent(
+            l -> l.resizeRelocate(ins.getLeft(), ins.getTop(), w, lensHeight)
+        );
+
         if ( wrapText.get() ) {
             double half = text.getLineSpacing() / 2.0;
-            text.resizeRelocate(graphicWidth + ins.getLeft(), ins.getTop() + half, w - graphicWidth, h - half);
+            text.resizeRelocate(graphicWidth + ins.getLeft(), top + half, w - graphicWidth, h - half);
         } else {
-            text.relocate( graphicWidth + ins.getLeft(), ins.getTop() );
+            text.relocate( graphicWidth + ins.getLeft(), top );
             text.setMinWidth( w - graphicWidth );
             text.autosize();
         }
 
         graphic.filter( Node::isManaged ).ifPresent(
-            g -> g.resizeRelocate(graphicOffset.get() + ins.getLeft(), ins.getTop(), graphicWidth, h)
+            g -> g.resizeRelocate(graphicOffset.get() + ins.getLeft(), top, graphicWidth, h)
         );
+    }
+
+    /** Height the lens occupies above the text, or 0 when there is none. */
+    double getLensPrefHeight() {
+        return lens.filter( Node::isManaged )
+            .map( n -> Math.max(n.prefHeight(-1), n.minHeight(-1)) )
+            .getOrElse( 0.0 );
     }
 
     double getGraphicPrefWidth() {
@@ -304,6 +358,9 @@ class ParagraphBox<PS, SEG, S> extends Region {
      * @return hit info for the given x and y coordinates
      */
     CharacterHit hitText(CaretOffsetX x, double y) {
-        return text.hit(x.value, y);
+        // `y` is relative to this box, and the text no longer starts at its top: without subtracting the
+        // lens band, a click lands one lens-height too low and the caret goes to the wrong line. The
+        // sibling hit(x, y) needs no such fix because it converts through screen coordinates.
+        return text.hit(x.value, y - getLensPrefHeight());
     }
 }
