@@ -301,4 +301,41 @@ public class ParagraphTest {
                 new String[] {"text", "unknown", "keyword", "text"},
                 0, 3, 4, 11, 11, 13, 12, 18);
     }
+
+    // A single-segment paragraph answers getText() with the segment's own String: no private copy
+    // (the editor would otherwise hold every plain-text line twice).
+    @Test
+    public void singleSegmentGetTextReturnsTheSegmentItself() {
+        TextOps<String, String> segOps = SegmentOps.styledTextOps();
+        String line = new String("the only segment");
+        Paragraph<Void, String, String> p = new Paragraph<>(null, segOps, line, "style");
+
+        assertSame(line, p.getText());
+        assertSame(p.getText(), p.getText());
+    }
+
+    @Test
+    public void multiSegmentGetTextJoinsSegmentsOnce() {
+        TextOps<String, String> noJoinOps = new TextOps<>() {
+            @Override public int length(String s) { return s.length(); }
+            @Override public char charAt(String s, int index) { return s.charAt(index); }
+            @Override public String getText(String s) { return s; }
+            @Override public String subSequence(String s, int start, int end) { return s.substring(start, end); }
+            @Override public String subSequence(String s, int start) { return s.substring(start); }
+            @Override public Optional<String> joinSeg(String currentSeg, String nextSeg) { return Optional.empty(); }
+            @Override public String createEmptySeg() { return ""; }
+            @Override public String create(String text) { return text; }
+        };
+        Paragraph<Void, String, String> a = new Paragraph<>(null, noJoinOps, "ab", "x");
+        Paragraph<Void, String, String> b = new Paragraph<>(null, noJoinOps, "cd", "y");
+        Paragraph<Void, String, String> p = a.concat(b);
+
+        assertEquals(2, p.getSegments().size());
+        assertEquals("abcd", p.getText());
+        assertSame(p.getText(), p.getText());
+
+        StringBuilder sb = new StringBuilder("[");
+        p.appendTextTo(sb);
+        assertEquals("[abcd", sb.toString());
+    }
 }

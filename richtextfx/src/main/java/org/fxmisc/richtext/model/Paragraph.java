@@ -408,15 +408,38 @@ public final class Paragraph<PS, SEG, S> {
     /**
      * Returns the plain text content of this paragraph,
      * not including the line terminator.
+     *
+     * <p>The result is cached. For a paragraph made of a single segment the cache is the segment's own
+     * text (for {@code String} segments, the segment itself), so no copy is made: a plain-text document
+     * otherwise held every line twice, once as the segment and once here.</p>
      */
     public String getText() {
         if(text == null) {
-            StringBuilder sb = new StringBuilder(length());
-            for(SEG seg: segments)
-                sb.append(segmentOps.getText(seg));
-            text = sb.toString();
+            if(segments.size() == 1) {
+                text = segmentOps.getText(segments.get(0));
+            } else {
+                StringBuilder sb = new StringBuilder(length());
+                for(SEG seg: segments)
+                    sb.append(segmentOps.getText(seg));
+                text = sb.toString();
+            }
         }
         return text;
+    }
+
+    /**
+     * Appends this paragraph's plain text to {@code sb} without populating the {@link #getText()} cache
+     * when doing so would allocate: a whole-document read must not leave a private copy of every
+     * multi-segment line behind. A single-segment paragraph's cache is free (see {@link #getText()}),
+     * so that one is filled as a side effect.
+     */
+    void appendTextTo(StringBuilder sb) {
+        if(text != null || segments.size() == 1) {
+            sb.append(getText());
+        } else {
+            for(SEG seg: segments)
+                sb.append(segmentOps.getText(seg));
+        }
     }
 
     @Override
