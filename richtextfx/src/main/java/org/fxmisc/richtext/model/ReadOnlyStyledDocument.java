@@ -237,10 +237,20 @@ public final class ReadOnlyStyledDocument<PS, SEG, S> implements StyledDocument<
     @Override
     public String getText() {
         if(text == null) {
-            String[] strings = getParagraphs().stream()
-                    .map(Paragraph::getText)
-                    .toArray(n -> new String[n]);
-            text = String.join("\n", strings);
+            // Built straight from the segments: going through Paragraph.getText() would leave a second
+            // copy of every multi-segment paragraph behind (paragraphs are immutable and shared across
+            // document versions, so those copies would live as long as the document does).
+            StringBuilder sb = new StringBuilder(length());
+            boolean first = true;
+            for(Paragraph<PS, SEG, S> p : getParagraphs()) {
+                if(first) {
+                    first = false;
+                } else {
+                    sb.append('\n');
+                }
+                p.appendTextTo(sb);
+            }
+            text = sb.toString();
         }
         return text;
     }

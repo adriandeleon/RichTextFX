@@ -104,6 +104,39 @@ class ParagraphBox<PS, SEG, S> extends Region {
         wrapText.addListener((obs, old, w) -> requestLayout());
     }
 
+    /*
+     * Preferred-height cache.
+     *
+     * Flowless re-asks every memoized cell for its preferred height whenever any known height changes
+     * (SizeTracker.averageLengthEstimate forces them all), which is on every edit and most scrolls. Each
+     * answer costs a full TextFlow re-layout with one font strike per styled run, so a 40-line viewport
+     * paid ~40 text layouts per keystroke. The height of a box is a pure function of the width it is asked
+     * for and of the scene-graph state below it, and every change to that state (a new segment node or
+     * inlay, a font or insets change from CSS, the gutter graphic, wrapText, visibility, a managed child's
+     * bounds) reaches this node through {@link #requestLayout()}: JavaFX routes Node.layoutBoundsChanged,
+     * Parent.requestParentLayout, children-list and managed/visible changes through that public method
+     * (TextFlow relies on the same hook to re-read its content). So the cache is keyed on the normalized
+     * width and dropped in requestLayout(); nothing else needs to know about it.
+     *
+     * Deliberately not dropped in layoutChildren(): a box is laid out after every resize, and that happens
+     * right after the first measurement of every new cell, so invalidating there would double the cost of
+     * each cell entering the viewport while protecting against nothing (Region size changes go through
+     * setNeedsLayout, not requestLayout, and the height asked for here does not depend on the box's own
+     * size). The paragraph a box shows never changes: RichTextFX replaces the cell on any edit or restyle.
+     */
+    private double cachedPrefHeight = -1;
+    private double cachedPrefHeightWidth = Double.NaN;
+    private int prefHeightComputations = 0;
+
+    /** Number of times the preferred height was actually computed (not served from the cache); for tests. */
+    int prefHeightComputations() { return prefHeightComputations; }
+
+    @Override
+    public void requestLayout() {
+        cachedPrefHeight = -1;
+        super.requestLayout();
+    }
+
     private final Val<Boolean> isFolded;
     public boolean isFolded() { return isFolded.getValue(); }
 
@@ -289,13 +322,18 @@ class ParagraphBox<PS, SEG, S> extends Region {
     protected double computePrefHeight(double width) {
         if ( isFolded.getValue() ) return 0.0;
         if ( ! wrapText.get() ) width = Double.MAX_VALUE;
+        if ( cachedPrefHeight >= 0 && cachedPrefHeightWidth == width ) return cachedPrefHeight;
         Insets insets = getInsets();
         double overhead = getGraphicPrefWidth() + insets.getLeft() + insets.getRight();
-        return text.prefHeight(width - overhead)
+        double height = text.prefHeight(width - overhead)
                 + insets.getTop()
                 + insets.getBottom()
                 + text.getLineSpacing()
                 + getLensPrefHeight();
+        prefHeightComputations++;
+        cachedPrefHeightWidth = width;
+        cachedPrefHeight = height;
+        return height;
     }
 
     @Override

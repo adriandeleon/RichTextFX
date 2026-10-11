@@ -158,4 +158,46 @@ public class ReadOnlyStyledDocumentTest {
         assertEquals(bold, spans.getStyleSpan(2).getStyle());
     }
 
+
+    private static boolean hasCachedText(Paragraph<?, ?, ?> p) throws Exception {
+        java.lang.reflect.Field f = Paragraph.class.getDeclaredField("text");
+        f.setAccessible(true);
+        return f.get(p) != null;
+    }
+
+    /** Whole-document text is built from the segments; a multi-segment paragraph keeps no private copy. */
+    @Test
+    public void getTextJoinsParagraphsWithoutCachingMultiSegmentParagraphText() throws Exception {
+        TextOps<String, String> noJoinOps = new TextOps<>() {
+            @Override public int length(String s) { return s.length(); }
+            @Override public char charAt(String s, int index) { return s.charAt(index); }
+            @Override public String getText(String s) { return s; }
+            @Override public String subSequence(String s, int start, int end) { return s.substring(start, end); }
+            @Override public String subSequence(String s, int start) { return s.substring(start); }
+            @Override public java.util.Optional<String> joinSeg(String currentSeg, String nextSeg) { return java.util.Optional.empty(); }
+            @Override public String createEmptySeg() { return ""; }
+            @Override public String create(String text) { return text; }
+        };
+        ReadOnlyStyledDocument<String, String, String> doc = fromString("one\n\nthree", "ps", "a", noJoinOps)
+                .replace(1, 2, fromString("N", "ps", "b", noJoinOps)).get1();
+        Paragraph<String, String, String> first = doc.getParagraph(0);
+        assertEquals(3, first.getSegments().size());
+        assertEquals(1, doc.getParagraph(2).getSegments().size());
+
+        assertEquals("oNe\n\nthree", doc.getText());
+        assertEquals(doc.length(), doc.getText().length());
+        assertFalse(hasCachedText(first), "multi-segment paragraph must not cache a copy on a whole-document read");
+        assertTrue(hasCachedText(doc.getParagraph(2)), "single-segment paragraph cache is the segment itself");
+        assertSame(doc.getText(), doc.getText());
+        assertEquals("oNe", first.getText());
+    }
+
+    @Test
+    public void getTextOfSinglePlainParagraphDocumentIsTheSegment() {
+        TextOps<String, String> segOps = SegmentOps.styledTextOps();
+        String line = new String("plain");
+        ReadOnlyStyledDocument<String, String, String> doc = fromSegment(line, "ps", "s", segOps);
+        assertSame(line, doc.getParagraph(0).getText());
+        assertEquals("plain", doc.getText());
+    }
 }
