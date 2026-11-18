@@ -7,6 +7,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.ObjectInputFilter;
+import java.io.ObjectInputStream;
+import java.nio.ByteBuffer;
 import java.util.Optional;
 
 import javafx.scene.control.IndexRange;
@@ -87,8 +90,8 @@ public interface ClipboardActions<PS, SEG, S> extends EditActions<PS, SEG, S> {
             Tuple2<Codec<PS>, Codec<StyledSegment<SEG, S>>> codecs = getStyleCodecs().get();
             Codec<StyledDocument<PS, SEG, S>> codec = ReadOnlyStyledDocument.codec(codecs._1, codecs._2, getSegOps());
             DataFormat format = dataFormat(codec.getName());
-            if(clipboard.hasContent(format)) {
-                byte[] bytes = (byte[]) clipboard.getContent(format);
+            byte[] bytes = clipboard.hasContent(format) ? bytesOf(clipboard.getContent(format)) : null;
+            if(bytes != null) {
                 ByteArrayInputStream is = new ByteArrayInputStream(bytes);
                 DataInputStream dis = new DataInputStream(is);
                 StyledDocument<PS, SEG, S> doc = null;
@@ -132,6 +135,53 @@ class ClipboardHelper {
             return format;
         } else {
             return new DataFormat(name);
+        }
+    }
+
+    /** The first four bytes of a Java serialization stream: magic {@code 0xACED}, version 5. */
+    private static final int SERIALIZED = 0xACED0005;
+
+    /**
+     * The bytes of a custom-format clipboard value; null when it holds none, so paste falls back to text.
+     * The area puts a {@code byte[]}, but the platform may hand it back as a {@link ByteBuffer}, and that
+     * buffer may hold the array's Java serialization rather than the array (JavaFX 27.0.1's headless clipboard
+     * does). A styled document never starts with that header (its first int is a paragraph count, never
+     * negative), so the header means "unwrap". Only a lone {@code byte[]} is ever deserialized.
+     */
+    static byte[] bytesOf(Object content) {
+        byte[] bytes;
+        if(content instanceof byte[]) {
+            bytes = (byte[]) content;
+        } else if(content instanceof ByteBuffer) {
+            ByteBuffer view = ((ByteBuffer) content).duplicate();
+            bytes = new byte[view.remaining()];
+            view.get(bytes);
+        } else {
+            return null;
+        }
+        return isSerialized(bytes) ? deserializedBytes(bytes) : bytes;
+    }
+
+    private static boolean isSerialized(byte[] bytes) {
+        return bytes.length >= 4 && ByteBuffer.wrap(bytes).getInt() == SERIALIZED;
+    }
+
+    /** The {@code byte[]} serialized in {@code bytes}, or null when it is anything else. */
+    private static byte[] deserializedBytes(byte[] bytes) {
+        try(ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(bytes))) {
+            in.setObjectInputFilter(info -> {
+                Class<?> type = info.serialClass();
+                if(info.depth() > 1 || info.references() > 4 || info.arrayLength() > bytes.length) {
+                    return ObjectInputFilter.Status.REJECTED; // one array, no larger than the stream itself
+                }
+                return type == null || type == byte[].class
+                        ? ObjectInputFilter.Status.ALLOWED
+                        : ObjectInputFilter.Status.REJECTED;
+            });
+            Object value = in.readObject();
+            return value instanceof byte[] ? (byte[]) value : null;
+        } catch(IOException | ClassNotFoundException | RuntimeException e) {
+            return null;
         }
     }
 }
