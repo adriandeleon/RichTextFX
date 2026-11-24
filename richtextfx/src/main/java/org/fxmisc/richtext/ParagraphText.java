@@ -282,15 +282,11 @@ class ParagraphText<PS, SEG, S> extends TextFlowExt {
         p.setLayoutX(getInsets().getLeft());
         p.setLayoutY(getInsets().getTop());
 
-        getChildren().add(p);
-
+        // The path is never added to the scene: adding and removing it left this text flow CSS-dirty, which
+        // cost every bounds query an extra rendered frame. Its bounds map through its layout offset alone.
         p.getElements().setAll(rangeShape);
         Bounds localBounds = p.getBoundsInLocal();
-        Bounds rangeBoundsOnScreen = p.localToScreen(localBounds);
-
-        getChildren().remove(p);
-
-        return rangeBoundsOnScreen;
+        return localToScreen(p.localToParent(localBounds));
     }
 
     public Optional<Bounds> getSelectionBoundsOnScreen(Selection<PS, SEG, S> selection) {
